@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>OpusMC</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:#0b0f0c;color:#93a08d;overflow:hidden;
+    font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  #boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+  #boot .bar{width:260px;height:4px;border-radius:2px;background:rgba(91,140,58,.22);overflow:hidden}
+  #boot .bar i{display:block;height:100%;width:0;background:#5b8c3a;transition:width .3s}
+  #boot p{font-size:14px}
+  #boot small{font-size:12px;color:#5d6a58}
+  #err{white-space:pre-wrap;font-size:13px;color:#d9534f;max-width:520px;text-align:center;line-height:1.7}
+</style>
+</head>
+<body>
+<div id="boot">
+  <p>正在加载游戏本体（分 4 段）</p>
+  <div class="bar"><i id="p"></i></div>
+  <small id="s">0 / 4</small>
+  <div id="err"></div>
+</div>
+
+<script>
+// 62.7 MB 的单文件被切成 4 段（每段 <20 MB），这里按顺序拉回来拼成完整 HTML 再 document.write。
+// 这样任何有单文件上限的静态托管（Cloudflare Pages 25 MB、jsDelivr 20 MB）都放得下。
+var PARTS = ['parts/p0.txt', 'parts/p1.txt', 'parts/p2.txt', 'parts/p3.txt'];
+var bar = document.getElementById('p');
+var lbl = document.getElementById('s');
+var errBox = document.getElementById('err');
+
+function fail(msg) {
+  errBox.textContent = '加载失败：' + msg + '\n试试刷新；如果一直失败，换个网络（部分 CDN 对单文件有限流）。';
+  lbl.textContent = '';
+}
+
+(async function () {
+  try {
+    var done = 0;
+    var texts = await Promise.all(PARTS.map(function (u, i) {
+      return fetch(u, { cache: 'force-cache' }).then(function (r) {
+        if (!r.ok) throw new Error(u + ' → HTTP ' + r.status);
+        return r.text();
+      }).then(function (t) {
+        done++;
+        bar.style.width = (done / PARTS.length * 100) + '%';
+        lbl.textContent = done + ' / ' + PARTS.length + '（' + (t.length / 1048576).toFixed(1) + ' MB）';
+        return t;
+      });
+    }));
+    var html = texts.join('');
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (e) {
+    fail(e && e.message ? e.message : String(e));
+  }
+})();
+</script>
+</body>
+</html>
