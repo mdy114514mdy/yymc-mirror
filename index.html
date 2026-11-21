@@ -183,7 +183,7 @@
   //   ?v=1     用 v1
   //   ?rooms=1 走同源 /rooms 反代的联机版（serve.mjs 提供）
   // GitHub Pages 版：只有 v2 本体 + 音效（纯静态，没有 /rooms 反代）
-  var GAME_URL = "game/OpusMC.v2.html";
+  var GAME_URL = "game/OpusMC.v4.html";
   var iframe = document.getElementById("game");
   var bar = document.getElementById("bar");
   var boot = document.getElementById("boot");
@@ -263,8 +263,15 @@
   // 工具条几秒后自动隐藏，双击任意处呼出
   setTimeout(function () { bar.classList.add("hide"); }, 4000);
 
-  applyLayout();
-  loadGame();
+  // iOS：iframe 会让父文档和游戏各占一份内存，直接顶层跳转，省掉那一份
+  var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS) {
+    location.replace(GAME_URL);
+  } else {
+    applyLayout();
+    loadGame();
+  }
 </script>
 </body>
 </html>
