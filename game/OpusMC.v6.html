@@ -1021848,7 +1021848,7 @@ Game.prototype.capturePanorama = function (size = 512) {
   'use strict';
   try {
     if (typeof RoomService !== 'undefined') {
-      RoomService.base = function () { return 'https://xz.honghemc.cn:8443'; };
+      RoomService.base = function () { try { var q = new URLSearchParams(location.search).get('rooms'); if (q) return String(q).replace(/\/+$/, ''); } catch (e) {} return 'https://xz.honghemc.cn:8443'; };
     }
   } catch (e) {}
 

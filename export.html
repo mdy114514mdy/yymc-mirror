@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YYMC 账号数据导出</title>
+<style>
+  body{margin:0;padding:16px;background:#0b0f0c;color:#e8efe5;font:14px/1.6 -apple-system,"PingFang SC",sans-serif}
+  h1{font-size:16px;margin:0 0 12px}
+  p{color:#93a08d;margin:0 0 12px}
+  textarea{width:100%;box-sizing:border-box;min-height:220px;background:#111714;color:#e8efe5;
+    border:1px solid rgba(232,239,229,.22);border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace}
+  button{margin-top:10px;height:42px;padding:0 18px;border-radius:999px;border:1px solid #5b8c3a;
+    background:#5b8c3a;color:#0b0f0c;font-size:15px;font-weight:700}
+  .hint{margin-top:12px;color:#93a08d;font-size:12px}
+  .ok{color:#7ab04a}
+</style>
+</head>
+<body>
+<h1>YYMC 账号数据导出</h1>
+<p>这个页面只读取本站（这个域名）下保存的登录数据，不会上传任何东西。</p>
+<textarea id="out" readonly></textarea>
+<button id="copy">复制</button>
+<div class="hint" id="hint"></div>
+
+<script>
+(function () {
+  var out = document.getElementById('out');
+  var hint = document.getElementById('hint');
+  var raw = null, parsed = null;
+  try { raw = localStorage.getItem('mcjs-account'); } catch (e) {}
+  try { parsed = raw ? JSON.parse(raw) : null; } catch (e) {}
+
+  if (!raw) {
+    out.value = '(空)\n这个域名下没有存过账号数据。\n\n可能原因：\n· 你当初是在别的域名登录的（比如 bilibili.com 里的 Toy 页、或者别的地址）\n· 或者清理过浏览器数据';
+    hint.textContent = '没有可导出的内容。';
+    return;
+  }
+
+  out.value = raw;
+
+  var lines = [];
+  if (parsed) {
+    if (parsed.token) lines.push('token：有（' + String(parsed.token).slice(0, 12) + '…）');
+    else lines.push('token：无');
+    if (parsed.bili) lines.push('bili(openId)：' + parsed.bili);
+    else if (parsed.bili === '') lines.push('bili(openId)：空（说明当初是用识别码登录的）');
+    else lines.push('bili(openId)：未记录');
+    if (parsed.account && parsed.account.name) lines.push('账号名：' + parsed.account.name);
+    if (parsed.account && parsed.account.id) lines.push('账号 id：' + parsed.account.id);
+  }
+  hint.innerHTML = lines.join('<br>') + '<br><br><span class="ok">把上面文本框里的内容整段复制发我即可。</span>';
+
+  document.getElementById('copy').onclick = function () {
+    out.select();
+    out.setSelectionRange(0, out.value.length);
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (!ok && navigator.clipboard) {
+      navigator.clipboard.writeText(out.value).then(function () { hint.innerHTML = '<span class="ok">已复制</span>'; });
+      return;
+    }
+    hint.innerHTML = ok ? '<span class="ok">已复制</span>' : '复制失败，请长按文本框手动复制';
+  };
+})();
+</script>
+</body>
+</html>
