@@ -184,6 +184,17 @@
   //   ?rooms=1 走同源 /rooms 反代的联机版（serve.mjs 提供）
   // GitHub Pages 版：只有 v2 本体 + 音效（纯静态，没有 /rooms 反代）
   var GAME_URL = "game/OpusMC.v6.html";
+
+  // 联机/登录服务只认 Origin: bilibili.com，必须走反代：
+  //   本地 -> serve.mjs 的 /rooms；线上 -> 自建 Worker（login.mdy114514mdy.us.ci，改写 Origin）
+  var SEARCH = location.search;
+  var isLocalHost = location.hostname === 'localhost' ||
+                    /^127\./.test(location.hostname) ||
+                    location.hostname === '[::1]';
+  var ROOMS_PROXY = isLocalHost ? (location.origin + '/rooms') : 'https://login.mdy114514mdy.us.ci';
+  if (!/[?&]rooms=/.test(SEARCH)) {
+    SEARCH += (SEARCH ? '&' : '?') + 'rooms=' + encodeURIComponent(ROOMS_PROXY);
+  }
   var iframe = document.getElementById("game");
   var bar = document.getElementById("bar");
   var boot = document.getElementById("boot");
@@ -201,7 +212,7 @@
 
   function loadGame() {
     boot.classList.remove("done");
-    iframe.src = GAME_URL + location.search;
+    iframe.src = GAME_URL + SEARCH;
   }
 
   // 方向 / 尺寸变化时重新布局
@@ -267,7 +278,7 @@
   var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (isIOS) {
-    location.replace(GAME_URL + location.search);
+    location.replace(GAME_URL + SEARCH);
   } else {
     applyLayout();
     loadGame();
