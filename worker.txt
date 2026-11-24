@@ -1,0 +1,80 @@
+// YYMC 中继 Worker —— v2：原有 /api/* HTTP 反代 + 新增 /p2p WebSocket 透传（恢复联机）
+export default {
+  async fetch(request) {
+    const cors = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+      'access-control-allow-headers': '*',
+      'access-control-expose-headers': '*',
+      'access-control-max-age': '86400',
+    };
+    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
+
+    const u = new URL(request.url);
+
+    // ---- 部署自检：浏览器打开 /__ver 看到 p2p:true，说明新版本已生效 ----
+    if (u.pathname === '/__ver') {
+      return new Response(JSON.stringify({ v: 2, p2p: true, upstream: 'xz.honghemc.cn:8443' }), {
+        headers: { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    }
+
+    const target = 'https://xz.honghemc.cn:8443' + u.pathname + u.search;
+    const upgrade = (request.headers.get('upgrade') || '').toLowerCase();
+
+    // ---- 联机信令：把 /p2p 的 WebSocket 升级透传给官方房间服务 ----
+    // 服务端只认 Origin: https://www.bilibili.com；Origin 在浏览器里改不了，只能由这里补。
+    // 透传只承担开房/进房那几帧（host / hosted / peer / join / joined / signal）；
+    // 建链之后的游戏流量走服务端下发的 TURN 中继，不经过本 Worker。
+    if (upgrade === 'websocket' || u.pathname === '/p2p') {
+      const h = new Headers(request.headers);
+      h.set('host', 'xz.honghemc.cn:8443');
+      h.set('origin', 'https://www.bilibili.com');
+      h.set('referer', 'https://www.bilibili.com/');
+      // connection 由运行时按 Upgrade 自己生成，显式透传反而可能被拒
+      h.delete('connection');
+      h.delete('cf-connecting-ip');
+      h.delete('cf-ipcountry');
+      h.delete('cf-ray');
+      h.delete('cf-visitor');
+      h.delete('cf-worker');
+
+      let r;
+      try {
+        r = await fetch(target, { headers: h });
+      } catch (e) {
+        return new Response('p2p upstream: ' + (e && e.message), { status: 502, headers: cors });
+      }
+      if (!r.webSocket) {
+        return new Response('p2p upgrade refused: HTTP ' + r.status, { status: 502, headers: cors });
+      }
+      return new Response(null, { status: 101, webSocket: r.webSocket });
+    }
+
+    // ---- 账号 / 云存档 / 房间列表：原来那一套，一字未改 ----
+    const h = new Headers(request.headers);
+    h.set('host', 'xz.honghemc.cn:8443');
+    h.set('origin', 'https://www.bilibili.com');
+    h.set('referer', 'https://www.bilibili.com/');
+    h.delete('cf-connecting-ip');
+    h.delete('cf-ipcountry');
+    h.delete('cf-ray');
+    h.delete('cf-visitor');
+
+    const init = { method: request.method, headers: h, redirect: 'manual' };
+    if (request.method !== 'GET' && request.method !== 'HEAD') init.body = request.body;
+
+    let r;
+    try {
+      r = await fetch(target, init);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: 'upstream: ' + e.message }), {
+        status: 502, headers: { ...cors, 'content-type': 'application/json' },
+      });
+    }
+    const out = new Headers(r.headers);
+    for (const k of Object.keys(cors)) out.set(k, cors[k]);
+    out.delete('content-security-policy');
+    return new Response(r.body, { status: r.status, headers: out });
+  },
+};
