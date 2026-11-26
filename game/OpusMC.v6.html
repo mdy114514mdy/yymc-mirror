@@ -879659,9 +879659,13 @@ class ChunkWorker {
   // the chunk it had hung on was then built on the main thread, which froze the page
   restart(why) {
     if (this.failed) return;
-    if (this.restarts >= 3) {
+    if (this.restarts >= 8) {
       this.fail(why);
       return;
+    }
+    if (this.restarts >= 3) {
+      if (this.retryAt && Date.now() < this.retryAt) return;
+      this.retryAt = Date.now() + 30000;
     }
     this.restarts++;
     console.warn('chunk worker: ' + why + ', starting a new one');
@@ -879684,6 +879688,16 @@ class ChunkWorker {
   check() {
     if (this.failed) return;
     const now = performance.now();
+    // (the page itself was paused - a background tab, a phone locked, a long GC: our ping and its answer were only
+    // late, not lost. Judging it stuck here poisoned a healthy chunk, and that chunk stayed a hole for ever)
+    if (this.lastCheck && now - this.lastCheck > 2500) {
+      this.lastCheck = now;
+      this.pingT = 0;
+      this.suspect = 0;
+      this.lastMsg = now;
+      return;
+    }
+    this.lastCheck = now;
     if (!this.ready) {
       if (now - this.startT > 60000) {
         this.game.reportError('区块线程启动不了', new Error('chunk worker not ready after 60 s'), true);
@@ -879719,7 +879733,12 @@ class ChunkWorker {
         this.poison.clear();
         this.poisonId = id;
       }
-      this.poison.set(k, last.s);
+      const prev = this.poison.get(k);
+      this.poison.set(k, {
+        s: last.s,
+        t: Date.now(),
+        n: prev && typeof prev === 'object' ? (prev.n || 0) + 1 : 0
+      });
     }
     const at = k !== undefined ? ' at chunk ' + (Math.floor(k / 65536) - 32768) + ',' + (k % 65536 - 32768) + ' stage ' + last.s : '';
     this.game.reportError(this.restarts < 3 ? '区块线程无响应（已重启）' : '区块线程无响应（改在主线程生成）', new Error('chunk worker timeout' + at), true);
@@ -879780,14 +879799,44 @@ class ChunkWorker {
       }, [b.buffer]);
     }
     const p = this.poisonFor(w);
-    if (p) this.post({
-      type: 'skip',
-      keys: [...p.keys()],
-      stages: [...p.values()]
-    });
+    if (p) {
+      const keys = [],
+        stages = [];
+      for (const key of [...p.keys()]) {
+        const st = this.poisonStage(key);
+        if (st !== undefined) {
+          keys.push(key);
+          stages.push(st);
+        }
+      }
+      if (keys.length) this.post({
+        type: 'skip',
+        keys,
+        stages
+      });
+    }
   }
   poisonFor(w) {
     return this.poison.size && w && this.poisonId === ChunkWorker.genId(w) ? this.poison : null;
+  }
+  // 这个区块现在还该被跳过吗？还该跳过就返回它卡住的阶段，可以再试了就返回 undefined。
+  poisonStage(k) {
+    const e = this.poison.get(k);
+    if (!e) return undefined;
+    if (typeof e === 'number') {
+      this.poison.set(k, { s: e, t: Date.now(), n: 0 });
+      return e;
+    }
+    if ((e.n || 0) >= 4) return e.s;
+    const wait = Math.min(60000, 2000 * Math.pow(2, e.n || 0));
+    if (Date.now() - e.t < wait) return e.s;
+    e.n = (e.n || 0) + 1;
+    e.t = Date.now();
+    return undefined;
+  }
+  gaveUp(k) {
+    const e = this.poison.get(k);
+    return !!(e && typeof e === 'object' && (e.n || 0) >= 4);
   }
   static genId(w) {
     return w.seedStr + ':' + (w.dim || 'overworld') + ':' + (w.structures !== false);
@@ -879830,6 +879879,7 @@ class ChunkWorker {
           this.lastMesh = performance.now();
           const cb = this.meshCb.get(m.id);
           this.meshCb.delete(m.id);
+          if (!m.error && m.cx !== undefined) this.poison.delete(ckey(m.cx, m.cz));
           if (cb) cb(m.error ? null : m);
           break;
         }
@@ -879838,6 +879888,7 @@ class ChunkWorker {
           if (m.epoch !== this.epoch || !w || !w.protoKeys) break;
           const k = ckey(m.cx, m.cz);
           w.protoKeys.delete(k);
+          this.poison.delete(k);
           g.genProgressT = performance.now();
           // it was on its way while the page told the worker to forget it (game.js chunkWatchdog): the worker drops it from
           // its finished set when that message arrives, so it is told again that the page has it - without, the chunks
@@ -880096,13 +880147,13 @@ Game.prototype.genStep = function (pcx, pcz, R, t0, budget) {
   };
   // (a chunk the chunk worker hung on - ChunkWorker.poison - isn't built here either: it would freeze the page. Hung
   // decorating it goes on undecorated, hung finishing it becomes an empty chunk)
-  const poison = cw ? cw.poisonFor(w) : null;
+  const pStage = key => (cw ? cw.poisonStage(key) : undefined);
   for (const [ch, d2] of cand) {
     if (!this.workFits(t0, budget * 0.6, 'decorate')) break;
     // (a chunk whose decoration fails goes on without it; one that can't be finished becomes empty - either
     // way the nearest chunk isn't stuck failing every frame with everything behind it waiting)
     if (ch.stage === 1 && around(ch, () => true)) {
-      if (!(poison && poison.get(ckey(ch.cx, ch.cz)) === 1)) this.timedWork('decorate', () => this.guard('decorate ' + ch.cx + ',' + ch.cz, () => this.decorateChunk(ch)));
+      if (pStage(ckey(ch.cx, ch.cz)) !== 1) this.timedWork('decorate', () => this.guard('decorate ' + ch.cx + ',' + ch.cz, () => this.decorateChunk(ch)));
       ch.stage = 2;
     }
   }
@@ -880110,7 +880161,7 @@ Game.prototype.genStep = function (pcx, pcz, R, t0, budget) {
     if (!this.workFits(t0, budget * 0.8, 'finalise')) break;
     if (ch.stage === 2 && d2 <= (R + 1.5) * (R + 1.5) && around(ch, n => n.stage === 2) && this.savedReady(w, ckey(ch.cx, ch.cz))) this.timedWork('finalise', () => {
       const k = ckey(ch.cx, ch.cz);
-      if (poison && poison.get(k) === 2) {
+      if (pStage(k) === 2) {
         proto.delete(k);
         if (!w.chunks.has(k)) this.finishStub(w, ch.cx, ch.cz);
         return;
@@ -880124,6 +880175,14 @@ Game.prototype.genStep = function (pcx, pcz, R, t0, budget) {
         if (!w.chunks.has(k)) this.finishChunk(new Chunk(ch.cx, ch.cz), false);
       }
     });
+  }
+  // 3.5) 退避用尽、worker 一直建不出来的区块：补一个空块，别留看不见的洞
+  if (cw) for (const [key, ch] of [...proto]) {
+    if (ch.stage === 2 && cw.gaveUp(key)) {
+      proto.delete(key);
+      if (!w.chunks.has(key)) this.finishStub(w, ch.cx, ch.cz);
+      this.reportError('chunk ' + ch.cx + ',' + ch.cz, new Error('given up after retries: left empty'), true);
+    }
   }
   // 4) forget proto chunks that drifted far away
   if (this.tickCount % 40 === 0) for (const ch of [...proto.values()]) {
